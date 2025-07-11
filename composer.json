@@ -1,0 +1,39 @@
+{
+    "name": "felixgro/fgdi",
+    "description": "Dependency Injection Container for PHP",
+    "type": "library",
+    "license": "MIT",
+    "version": "1.0.0",
+    "authors": [
+        {
+            "name": "Felix Grohs",
+            "email": "53900040+felixgro@users.noreply.github.com"
+        }
+    ],
+    "scripts": {
+        "test": "pest"
+    },
+    "require": {
+        "php": "^8.0",
+        "psr/container": "^2.0"
+    },
+    "require-dev": {
+        "pestphp/pest": "^3.8",
+        "pestphp/pest-plugin-watch": "^3.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "FGDI\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Tests\\": "tests/"
+        }
+    },
+    "config": {
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    }
+}
