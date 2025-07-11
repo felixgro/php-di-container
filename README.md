@@ -11,6 +11,15 @@ A simple and lightweight Dependency Injection Container for PHP, compliant with 
 
 ## Getting Started
 
+### Installation
+You can install the container using Composer. Run the following command in your terminal:
+
+```bash
+composer require felixgro/fgdi
+```
+
+### Basic Usage
+
 ```php
 use FGDI\Container;
 
