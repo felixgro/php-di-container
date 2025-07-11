@@ -1,6 +1,6 @@
 # Modern Dependency Injection Container for PHP
 
-A simple and modern Dependency Injection Container for PHP, compliant with PSR-11.
+A simple and lightweight Dependency Injection Container for PHP, compliant with PSR-11.
 
 ## Features
 - **PSR-11 Compliance**: Fully compliant with the PSR-11 Container Interface.

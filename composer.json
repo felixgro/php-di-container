@@ -1,6 +1,6 @@
 {
     "name": "felixgro/fgdi",
-    "description": "Dependency Injection Container for PHP",
+    "description": "Minimal Dependency Injection Container",
     "keywords": [
         "dependency-injection",
         "container",
