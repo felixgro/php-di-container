@@ -1,6 +1,12 @@
 {
     "name": "felixgro/fgdi",
     "description": "Dependency Injection Container for PHP",
+    "keywords": [
+        "dependency-injection",
+        "container",
+        "di",
+        "service-provider"
+    ],
     "type": "library",
     "license": "MIT",
     "version": "1.0.0",
