@@ -8,7 +8,7 @@ A simple and modern Dependency Injection Container for PHP, compliant with PSR-1
 - **Automatic Resolution**: Automatically resolves dependencies based on type hints.
 - **Singleton Support**: Easily register and retrieve singleton services.
 
-## Installation
+## Getting Started
 TBA
 
 ## Development
