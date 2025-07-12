@@ -44,6 +44,14 @@ class Container implements ContainerInterface
         $this->bindings[$id] = $this->generateFactory($id, $factory);
     }
 
+    public function setAlias(string $alias, string $id)
+    {
+        if (!$this->has($id)) {
+            throw new ContainerException("Cannot set alias for {$alias} because binding for {$id} does not exist.");
+        }
+        $this->bindings[$alias] = $this->bindings[$id];
+    }
+
     public function singleton(string $id, mixed $factory = null)
     {
         $factory = $this->generateFactory($id, $factory);
@@ -53,6 +61,32 @@ class Container implements ContainerInterface
             }
             return $this->singletons[$id];
         };
+    }
+
+    public function executeMethod(string $class, string $method)
+    {
+        if (!class_exists($class)) {
+            throw new ContainerException("Class {$class} does not exist.");
+        }
+
+        $reflection = new ReflectionClass($class);
+        if (!$reflection->hasMethod($method)) {
+            throw new ContainerException("Method {$method} does not exist in class {$class}.");
+        }
+
+        $methodReflection = $reflection->getMethod($method);
+        $parameters = $methodReflection->getParameters();
+        $dependencies = [];
+
+        foreach ($parameters as $parameter) {
+            $type = $parameter->getType();
+            if (is_null($type)) {
+                throw new ContainerException("Parameter {$parameter->getName()} in method {$method} has no type hint.");
+            }
+            $dependencies[] = $this->get($type->getName());
+        }
+
+        return $methodReflection->invokeArgs(new $class(), $dependencies);
     }
 
     private function generateFactory(string $id, mixed $factory): callable
