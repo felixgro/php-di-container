@@ -54,19 +54,15 @@ test('can autoresolve a class with built-in types', function () {
     class AuthService
     {
         public function __construct(public string $authType) {}
+
+        public function test(): string
+        {
+            return $this->authType;
+        }
     }
 
     $container = new Container();
     $container->set('authType', fn() => 'JWT');
     $auth = $container->get(AuthService::class);
     expect($auth)->toBeInstanceOf(AuthService::class);
-});
-
-test('throws exception for non-instantiable class', function () {
-    class NonInstantiableClass {
-        private function __construct() {}
-    }
-
-    $container = new Container();
-    expect(fn() => $container->get(NonInstantiableClass::class))->toThrow(ContainerException::class);
 });

@@ -4,21 +4,39 @@ namespace FGDI;
 
 use ReflectionClass;
 use Psr\Container\ContainerInterface;
+use FGDI\Exceptions\AliasException;
+use FGDI\Exceptions\BindingException;
 use FGDI\Exceptions\ContainerException;
 use FGDI\Exceptions\NotFoundException;
+use FGDI\Exceptions\NotInstantiableException;
+use FGDI\Exceptions\ParameterResolutionException;
+use FGDI\Exceptions\ResolutionException;
 
 /**
- * A lightweight DI Container with generic-aware docblocks.
+ * Lightweight DI Container with rich errors and generic-aware docblocks (Psalm/PHPStan).
  */
-class Container implements ContainerInterface
+final class Container implements ContainerInterface
 {
-    /** @var array<string, callable(self):mixed> */
+    /**
+     * Map of canonical id => factory closure.
+     *
+     * @var array<string, callable(self):mixed>
+     * @phpstan-var array<string, callable(self):mixed>
+     */
     private array $bindings = [];
 
-    /** @var array<string, mixed> */
+    /**
+     * Map of canonical id => singleton instance.
+     *
+     * @var array<string, mixed>
+     */
     private array $singletons = [];
 
-    /** @var array<string,string> */
+    /**
+     * Map of alias => target id (can be class-string or another alias).
+     *
+     * @var array<string,string>
+     */
     private array $aliases = [];
 
     /**
@@ -34,29 +52,39 @@ class Container implements ContainerInterface
     {
         $id = $this->canonicalId($id);
 
-        if ($this->hasBinding($id)) {
-            $binding = $this->bindings[$id];
-            return $binding($this);
+        try {
+            if ($this->hasBinding($id)) {
+                $factory = $this->bindings[$id];
+                /** @var T */
+                return $factory($this);
+            }
+
+            if (\class_exists($id) || \interface_exists($id)) {
+                /** @var T */
+                return $this->resolve($id, new ResolutionContext()); // let resolve() push/pop
+            }
+        } catch (ContainerException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            throw new ResolutionException("Failed to resolve '{$id}'.", 0, $e);
         }
 
-        if (class_exists($id)) {
-            return $this->resolve($id);
-        }
-
-        throw new NotFoundException("Binding for {$id} not found and not instantiable in the container.");
+        throw new NotFoundException("No binding found for '{$id}' and class is not instantiable.");
     }
 
     /**
      * Check if an entry exists by id or class name.
      * Also returns true for instantiable classes even if not bound.
-     * 
+     *
      * @param class-string|non-empty-string $id
      */
     public function has(string $id): bool
     {
         $id = $this->canonicalId($id);
-        return array_key_exists($id, $this->bindings)
-            || (class_exists($id) && (new ReflectionClass($id))->isInstantiable());
+
+        return \array_key_exists($id, $this->bindings)
+            || ((\class_exists($id) || \interface_exists($id))
+                && (new \ReflectionClass($id))->isInstantiable());
     }
 
     /**
@@ -67,33 +95,22 @@ class Container implements ContainerInterface
      */
     public function hasBinding(string $id): bool
     {
-        return array_key_exists($this->canonicalId($id), $this->bindings);
+        return \array_key_exists($this->canonicalId($id), $this->bindings);
     }
 
     /**
-     * Register a binding.
+     * Register a binding (factory or raw value).
      *
      * @template T
      * @param class-string<T>|string $id
-     * @param (callable(self):T)|T|null $factory
+     * @param (callable(ContainerInterface):T)|T|null $factory
      * @return void
      */
     public function set(string $id, mixed $factory = null): void
     {
+        $id = $this->canonicalId($id);
         $this->bindings[$id] = $this->generateFactory($id, $factory);
-    }
-
-    /**
-     * @param non-empty-string $alias
-     * @param class-string|non-empty-string $id
-     */
-    public function setAlias(string $alias, string $id): void
-    {
-        if ($alias === $id) {
-            throw new ContainerException("Alias cannot reference itself: {$alias}");
-        }
-        // Allow aliasing even if $id isn’t bound yet (it could be a class).
-        $this->aliases[$alias] = $id;
+        unset($this->singletons[$id]); // reset stale singleton
     }
 
     /**
@@ -101,16 +118,23 @@ class Container implements ContainerInterface
      *
      * @template T
      * @param class-string<T>|string $id
-     * @param (callable(self):T)|T|null $factory
+     * @param (callable(ContainerInterface):T)|T|null $factory
      * @return void
      */
     public function singleton(string $id, mixed $factory = null): void
     {
+        $id = $this->canonicalId($id);
         $factory = $this->generateFactory($id, $factory);
+
+        /**
+         * @return T
+         * @phpstan-return T
+         */
         $this->bindings[$id] = function (self $container) use ($id, $factory) {
-            if (!array_key_exists($id, $this->singletons)) {
-                /** @var T */
-                $this->singletons[$id] = $factory($container);
+            if (!\array_key_exists($id, $this->singletons)) {
+                /** @var T $instance */
+                $instance = $factory($container);
+                $this->singletons[$id] = $instance;
             }
             /** @var T */
             return $this->singletons[$id];
@@ -118,9 +142,22 @@ class Container implements ContainerInterface
     }
 
     /**
-     * Execute a method and have parameters auto-resolved.
+     * Create an alias. Target may be bound later.
      *
-     * Return type is unknown to the container, so `mixed`.
+     * @param non-empty-string $alias
+     * @param class-string|non-empty-string $id
+     * @return void
+     */
+    public function setAlias(string $alias, string $id): void
+    {
+        if ($alias === $id) {
+            throw new AliasException("Alias cannot reference itself: '{$alias}'");
+        }
+        $this->aliases[$alias] = $id;
+    }
+
+    /**
+     * Execute a method with auto-resolved parameters.
      *
      * @template T of object
      * @param class-string<T> $class
@@ -129,163 +166,244 @@ class Container implements ContainerInterface
      */
     public function executeMethod(string $class, string $method): mixed
     {
-        if (!class_exists($class)) {
+        if (!\class_exists($class)) {
             throw new ContainerException("Class {$class} does not exist.");
         }
 
-        $reflection = new ReflectionClass($class);
-        if (!$reflection->hasMethod($method)) {
+        $refl = new ReflectionClass($class);
+        if (!$refl->hasMethod($method)) {
             throw new ContainerException("Method {$method} does not exist in class {$class}.");
         }
 
-        $methodReflection = $reflection->getMethod($method);
-        $parameters = $methodReflection->getParameters();
-        $dependencies = [];
+        $methodRefl = $refl->getMethod($method);
+        $params = $methodRefl->getParameters();
+        $deps = [];
 
-        foreach ($parameters as $parameter) {
-            $type = $parameter->getType();
+        foreach ($params as $p) {
+            $type = $p->getType();
             if ($type === null) {
-                throw new ContainerException("Parameter {$parameter->getName()} in method {$method} has no type hint.");
+                if ($p->isDefaultValueAvailable()) {
+                    $deps[] = $p->getDefaultValue();
+                    continue;
+                }
+                throw new ParameterResolutionException("Parameter \${$p->getName()} in {$class}::{$method}() has no type and no default.");
             }
-            // For simplicity, we assume a named type here; see note below for unions/intersections.
-            /** @var class-string|non-empty-string $typeName */
-            $typeName = $type->getName();
-            $dependencies[] = $this->get($typeName);
+
+            if ($type instanceof \ReflectionUnionType || $type instanceof \ReflectionIntersectionType) {
+                throw new ParameterResolutionException(
+                    "Parameter \${$p->getName()} in {$class}::{$method}() uses unsupported type '{$type}'."
+                );
+            }
+
+            /** @var \ReflectionNamedType $type */
+            $name = $type->getName();
+            $name = $type->isBuiltin() ? $p->getName() : $this->canonicalId($name);
+            $deps[] = $this->get($name);
         }
 
-        return $methodReflection->invokeArgs(new $class(), $dependencies);
+        // newInstanceWithoutConstructor + invokeArgs for methods that don't rely on ctor (your original behavior)
+        return $methodRefl->invokeArgs($refl->newInstanceWithoutConstructor(), $deps);
     }
 
     /**
-     * Normalize any $factory to a closure returning T.
+     * Normalize any $factory to a closure and preserve cause if it throws.
      *
      * @template T
      * @param class-string<T>|string $id
-     * @param (callable(self):T)|T|null $factory
+     * @param (callable(ContainerInterface):T)|T|null $factory
      * @return callable(self):T
+     * @phpstan-return callable(self):T
      */
     private function generateFactory(string $id, mixed $factory): callable
     {
-        if (is_callable($factory)) {
-            /** @var callable(self):T $factory */
-            return $factory;
-        }
-
-        if ($factory === null) {
-            /** @var callable(self):T */
-            return $this->generateFactoryFromClass($id);
-        }
-
-        // Wrap raw values/objects in a closure.
-        $isBuiltinType = in_array(gettype($factory), [
-            'boolean',
-            'integer',
-            'double',
-            'string',
-            'array',
-            'object',
-        ], true);
-
-        if ($isBuiltinType /* && !empty($factory) not required for typing */) {
-            return function (self $container) use ($factory) {
-                /** @var T */
-                return $factory;
+        if (\is_callable($factory)) {
+            /**
+             * @return T
+             * @phpstan-return T
+             */
+            return function (self $c) use ($id, $factory) {
+                try {
+                    /** @var callable(ContainerInterface):T $factory */
+                    return $factory($c);
+                } catch (\Throwable $e) {
+                    throw new BindingException("Factory for '{$id}' threw: {$e->getMessage()}", 0, $e);
+                }
             };
         }
 
-        throw new ContainerException("Invalid factory provided for binding {$id}: " . gettype($factory));
-    }
-
-    /**
-     * @template T of object
-     * @param class-string<T> $id
-     * @return callable(self):T
-     */
-    private function generateFactoryFromClass(string $id): callable
-    {
-        if (!class_exists($id)) {
-            throw new ContainerException("Class {$id} does not exist.");
+        if ($factory === null) {
+            if (!\class_exists($id)) {
+                throw new BindingException("Cannot infer factory for '{$id}': class does not exist and no factory provided.");
+            }
+            /**
+             * @return T
+             * @phpstan-return T
+             */
+            return fn(self $c) => $c->resolve($id, new ResolutionContext());
         }
-        return function (self $container) use ($id) {
-            /** @var T */
-            return $container->resolve($id);
-        };
+
+        // Accept any raw value (including falsy); T will be that value's type at usage site.
+        /**
+         * @return T
+         * @phpstan-return T
+         */
+        return fn() => $factory;
     }
 
     /**
-     * Instantiate a class, resolving its constructor dependencies.
+     * Resolve alias chain to canonical id; detect cycles.
      *
-     * @template T of object
-     * @param class-string<T> $id
-     * @return T
+     * @param class-string|non-empty-string $id
+     * @return class-string|non-empty-string
      */
-    private function resolve(string $id): mixed
-    {
-        $reflection = new ReflectionClass($id);
-
-        if (!$reflection->isInstantiable()) {
-            throw new ContainerException("Class {$id} is not instantiable.");
-        }
-
-        $constructor = $reflection->getConstructor();
-        if ($constructor === null) {
-            /** @var T */
-            return new $id();
-        }
-
-        $parameters = $constructor->getParameters();
-        $dependencies = [];
-
-        foreach ($parameters as $parameter) {
-            $name = $parameter->getName();
-            $type = $parameter->getType();
-
-            if ($type === null) {
-                throw new ContainerException("Cannot resolve parameter {$name} in class {$id} because its type is not defined.");
-            }
-
-            // NOTE: This assumes a NamedType. If you plan to support union/intersection,
-            // add handling here (see note below).
-            /** @var class-string|non-empty-string $concrete */
-            $concrete = $type->getName();
-
-            if ($type->isBuiltin() && $this->hasBinding($name)) {
-                $dependencies[] = $this->get($name);
-                continue;
-            }
-
-            if ($this->hasBinding($concrete)) {
-                $dependencies[] = $this->get($concrete);
-                continue;
-            }
-
-            if (class_exists($concrete)) {
-                $dependencies[] = $this->resolve($concrete);
-                continue;
-            }
-
-            throw new ContainerException("Cannot resolve parameter {$name} in class {$id} because it is not registered in the container.");
-        }
-
-        try {
-            /** @var T */
-            return $reflection->newInstanceArgs($dependencies);
-        } catch (\Throwable $e) {
-            throw new ContainerException("Failed to create an instance of {$id}: " . $e->getMessage(), 0, $e);
-        }
-    }
-
-    // Canonicalize an id via aliases with cycle detection
     private function canonicalId(string $id): string
     {
         $seen = [];
         while (isset($this->aliases[$id])) {
             if (isset($seen[$id])) {
-                throw new ContainerException("Alias cycle detected at {$id}");
+                $chain = \implode(' -> ', \array_keys($seen)) . " -> {$id}";
+                throw new AliasException("Alias cycle detected: {$chain}");
             }
             $seen[$id] = true;
             $id = $this->aliases[$id];
         }
         return $id;
+    }
+
+    /**
+     * Instantiate a class, resolving constructor dependencies with rich errors.
+     *
+     * @template T of object
+     * @param class-string<T> $id
+     * @param ResolutionContext|null $ctx
+     * @return T
+     * @phpstan-return T
+     */
+    private function resolve(string $id, ?ResolutionContext $ctx = null): mixed
+    {
+        $ctx ??= new ResolutionContext();
+        $ctx->push($id);
+
+        try {
+            $refl = new ReflectionClass($id);
+
+            if (!$refl->isInstantiable()) {
+                $kind = $refl->isInterface() ? 'interface' : ($refl->isAbstract() ? 'abstract class' : 'class');
+                throw new NotInstantiableException("'{$id}' is a {$kind} and cannot be instantiated. Stack: {$ctx->breadcrumb()}");
+            }
+
+            $ctor = $refl->getConstructor();
+            if ($ctor === null) {
+                /** @var T */
+                return new $id();
+            }
+
+            $args = [];
+            foreach ($ctor->getParameters() as $p) {
+                $type = $p->getType();
+
+                if ($type === null) {
+                    if ($p->isDefaultValueAvailable()) {
+                        $args[] = $p->getDefaultValue();
+                        continue;
+                    }
+                    throw new ParameterResolutionException(
+                        "Parameter \${$p->getName()} in {$id}::__construct() has no type and no default. Stack: {$ctx->breadcrumb()}"
+                    );
+                }
+
+                if ($type instanceof \ReflectionUnionType || $type instanceof \ReflectionIntersectionType) {
+                    throw new ParameterResolutionException(
+                        "Parameter \${$p->getName()} in {$id}::__construct() uses unsupported type '{$type}'. Stack: {$ctx->breadcrumb()}"
+                    );
+                }
+
+                /** @var \ReflectionNamedType $type */
+                $typeName = $type->getName();
+
+                if ($type->isBuiltin()) {
+                    // scalar by parameter-name binding; otherwise default, otherwise error
+                    if ($this->hasBinding($p->getName())) {
+                        $args[] = $this->get($p->getName());
+                        continue;
+                    }
+                    if ($p->isDefaultValueAvailable()) {
+                        $args[] = $p->getDefaultValue();
+                        continue;
+                    }
+                    throw new ParameterResolutionException(
+                        "Cannot resolve scalar \${$p->getName()} (type {$typeName}) for {$id}::__construct(): no binding for '{$p->getName()}' and no default. Stack: {$ctx->breadcrumb()}"
+                    );
+                }
+
+                $target = $this->canonicalId($typeName);
+
+                if ($this->hasBinding($target)) {
+                    $args[] = $this->get($target);
+                    continue;
+                }
+
+                if (\class_exists($target)) {
+                    $args[] = $this->resolve($target, $ctx);
+                    continue;
+                }
+
+                if ($type->allowsNull() && $p->isDefaultValueAvailable() && $p->getDefaultValue() === null) {
+                    $args[] = null;
+                    continue;
+                }
+
+                throw new ParameterResolutionException(
+                    "Cannot resolve parameter \${$p->getName()} (type {$typeName}) for {$id}::__construct(): not bound and not instantiable. Stack: {$ctx->breadcrumb()}"
+                );
+            }
+
+            try {
+                /** @var T */
+                return $refl->newInstanceArgs($args);
+            } catch (\Throwable $e) {
+                throw new ResolutionException("Constructor for '{$id}' threw: {$e->getMessage()}. Stack: {$ctx->breadcrumb()}", 0, $e);
+            }
+        } finally {
+            $ctx->pop();
+        }
+    }
+
+    /**
+     * Forget a singleton instance for this id.
+     *
+     * @param class-string|non-empty-string $id
+     * @return void
+     */
+    public function forget(string $id): void
+    {
+        $id = $this->canonicalId($id);
+        unset($this->singletons[$id]);
+    }
+
+    /**
+     * Clear all bindings, singletons, and aliases.
+     *
+     * @return void
+     */
+    public function clear(): void
+    {
+        $this->bindings = [];
+        $this->singletons = [];
+        $this->aliases = [];
+    }
+
+    /**
+     * Dev helper: dump the exception causal chain as text.
+     */
+    public function debugWhatFailed(\Throwable $e): string
+    {
+        $lines = [\get_class($e) . ': ' . $e->getMessage()];
+        $prev = $e->getPrevious();
+        while ($prev) {
+            $lines[] = 'Caused by ' . \get_class($prev) . ': ' . $prev->getMessage();
+            $prev = $prev->getPrevious();
+        }
+        return \implode("\n", $lines);
     }
 }
