@@ -56,11 +56,12 @@ class Container implements ContainerInterface
     {
         $id = $this->canonicalId($id);
         return array_key_exists($id, $this->bindings)
-            || (class_exists($id) && (new \ReflectionClass($id))->isInstantiable());
+            || (class_exists($id) && (new ReflectionClass($id))->isInstantiable());
     }
 
     /**
-     * Check if a binding exists for the given id (ignores classes).
+     * Check if a binding exists for the given id.
+     * Strictly checks only the bindings, not instantiable classes.
      *
      * @param class-string|non-empty-string $id
      */
