@@ -33,3 +33,43 @@ test('can inject singleton dependencies into a method', function () {
     expect($requestFromMethod)->toBeInstanceOf(RequestSingleton::class);
     expect($requestFromContainer)->toBe($requestFromMethod);
 });
+
+test('can inject primitive dependencies into a method', function () {
+    class AnyControllerClass {
+        public function index(string $env) {
+            return $env;
+        }
+    }
+
+    $container = new Container();
+
+    $returnValue = $container->executeMethod(AnyControllerClass::class, 'index', [
+        'env' => 'production',
+    ]);
+    expect($returnValue)->toBe('production');
+});
+
+test('can inject primitive dependencies into a method mixed with resolvable dependencies.', function () {
+    class RequestService2 {
+        public $id = 42;
+    }
+    class AnyControllerClass2 {
+        public RequestService2 $requestService;
+        public function index(RequestService2 $requestService, string $env) {
+            return [
+                'env' => $env,
+                'requestServiceId' => $requestService->id,
+            ];
+        }
+    }
+
+    $container = new Container();
+
+    $returnValue = $container->executeMethod(AnyControllerClass2::class, 'index', [
+        'env' => 'production',
+    ]);
+    expect($returnValue)->toBe([
+        'env' => 'production',
+        'requestServiceId' => 42,
+    ]);
+});

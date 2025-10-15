@@ -158,13 +158,16 @@ final class Container implements ContainerInterface
 
     /**
      * Execute a method with auto-resolved parameters.
+     * You may pass primitive parameters as an associative array.
+     * These parameters are matched by name and not registered as bindings.
      *
      * @template T of object
      * @param class-string<T> $class
      * @param non-empty-string $method
+     * @param array<string,mixed> $params
      * @return mixed
      */
-    public function executeMethod(string $class, string $method): mixed
+    public function executeMethod(string $class, string $method, array $additionalParams = []): mixed
     {
         if (!\class_exists($class)) {
             throw new ContainerException("Class {$class} does not exist.");
@@ -180,24 +183,31 @@ final class Container implements ContainerInterface
         $deps = [];
 
         foreach ($params as $p) {
+            $paramName = $p->getName();
+
+            if (array_key_exists($paramName, $additionalParams)) {
+                $deps[] = $additionalParams[$paramName];
+                continue;
+            }
+
             $type = $p->getType();
             if ($type === null) {
                 if ($p->isDefaultValueAvailable()) {
                     $deps[] = $p->getDefaultValue();
                     continue;
                 }
-                throw new ParameterResolutionException("Parameter \${$p->getName()} in {$class}::{$method}() has no type and no default.");
+                throw new ParameterResolutionException("Parameter \${$paramName} in {$class}::{$method}() has no type and no default.");
             }
 
             if ($type instanceof \ReflectionUnionType || $type instanceof \ReflectionIntersectionType) {
                 throw new ParameterResolutionException(
-                    "Parameter \${$p->getName()} in {$class}::{$method}() uses unsupported type '{$type}'."
+                    "Parameter \${$paramName} in {$class}::{$method}() uses unsupported type '{$type}'."
                 );
             }
 
             /** @var \ReflectionNamedType $type */
             $name = $type->getName();
-            $name = $type->isBuiltin() ? $p->getName() : $this->canonicalId($name);
+            $name = $type->isBuiltin() ? $paramName : $this->canonicalId($name);
             $deps[] = $this->get($name);
         }
 
