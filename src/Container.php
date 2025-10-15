@@ -216,6 +216,53 @@ final class Container implements ContainerInterface
     }
 
     /**
+     * Execute a function with auto-resolved parameters.
+     * You may pass primitive parameters as an associative array.
+     * These parameters are matched by name and not registered as bindings.
+     *
+     * @param callable $function
+     * @param array<string,mixed> $additionalParams
+     * @return mixed
+     */
+    public function executeFunction(callable $function, array $additionalParams = []): mixed
+    {
+        $refl = new \ReflectionFunction($function);
+        $params = $refl->getParameters();
+        $deps = [];
+
+        foreach ($params as $p) {
+            $paramName = $p->getName();
+
+            if (array_key_exists($paramName, $additionalParams)) {
+                $deps[] = $additionalParams[$paramName];
+                continue;
+            }
+
+            $type = $p->getType();
+            if ($type === null) {
+                if ($p->isDefaultValueAvailable()) {
+                    $deps[] = $p->getDefaultValue();
+                    continue;
+                }
+                throw new ParameterResolutionException("Parameter \${$paramName} in function has no type and no default.");
+            }
+
+            if ($type instanceof \ReflectionUnionType || $type instanceof \ReflectionIntersectionType) {
+                throw new ParameterResolutionException(
+                    "Parameter \${$paramName} in function uses unsupported type '{$type}'."
+                );
+            }
+
+            /** @var \ReflectionNamedType $type */
+            $name = $type->getName();
+            $name = $type->isBuiltin() ? $paramName : $this->canonicalId($name);
+            $deps[] = $this->get($name);
+        }
+
+        return $refl->invokeArgs($deps);
+    }
+
+    /**
      * Normalize any $factory to a closure and preserve cause if it throws.
      *
      * @template T

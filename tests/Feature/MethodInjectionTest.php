@@ -73,3 +73,22 @@ test('can inject primitive dependencies into a method mixed with resolvable depe
         'requestServiceId' => 42,
     ]);
 });
+
+test('can inject primitive dependencies into a function with default values', function () {
+    $container = new Container();
+
+    $returnValue = $container->executeFunction(function (int $count = 10, string $name = 'foo') {
+        return [
+            'count' => $count,
+            'name' => $name,
+        ];
+    }, [
+        'name' => 'bar',
+        'count' => 10,
+    ]);
+
+    expect($returnValue)->toBe([
+        'count' => 10,
+        'name' => 'bar',
+    ]);
+});
