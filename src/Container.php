@@ -162,18 +162,30 @@ final class Container implements ContainerInterface
      * These parameters are matched by name and not registered as bindings.
      *
      * @template T of object
-     * @param class-string<T> $class
+     * @param class-string<T>|T $target class concrete or existing instance
      * @param non-empty-string $method
      * @param array<string,mixed> $params
      * @return mixed
      */
-    public function executeMethod(string $class, string $method, array $additionalParams = []): mixed
+    public function executeMethod(string|object $target, string $method, array $additionalParams = []): mixed
     {
-        if (!\class_exists($class)) {
-            throw new ContainerException("Class {$class} does not exist.");
+        $instance = null;
+        if (is_object($target)) {
+            // Use the provided instance
+            $instance = $target;
+            $class = $target::class;
+            $refl = new \ReflectionObject($instance);
+        } else {
+            // Original behavior: accept a class name
+            $class = $target;
+
+            if (!\class_exists($class)) {
+                throw new ContainerException("Class {$class} does not exist.");
+            }
+
+            $refl = new \ReflectionClass($class);
         }
 
-        $refl = new ReflectionClass($class);
         if (!$refl->hasMethod($method)) {
             throw new ContainerException("Method {$method} does not exist in class {$class}.");
         }
@@ -209,6 +221,16 @@ final class Container implements ContainerInterface
             $name = $type->getName();
             $name = $type->isBuiltin() ? $paramName : $this->canonicalId($name);
             $deps[] = $this->get($name);
+        }
+
+        // If an instance was provided, use it.
+        if ($instance !== null) {
+            return $methodRefl->invokeArgs($instance, $deps);
+        }
+
+        // Handle static methods on class strings without instantiation.
+        if ($methodRefl->isStatic()) {
+            return $methodRefl->invokeArgs(null, $deps);
         }
 
         // newInstanceWithoutConstructor + invokeArgs for methods that don't rely on ctor (your original behavior)

@@ -92,3 +92,28 @@ test('can inject primitive dependencies into a function with default values', fu
         'name' => 'bar',
     ]);
 });
+
+test('can inject primitive dependencies into a method of a given instance', function () {
+    class ApplicationServiceProvider {
+        private bool $isRegistered = false;
+        public function register(string $key) {
+            $this->isRegistered = true;
+            return $key;
+        }
+        public function boot() {
+            return $this->isRegistered;
+        }
+    }
+
+    $container = new Container();
+
+    $sp = $container->get(ApplicationServiceProvider::class);
+
+    $registerEnv = $container->executeMethod($sp, 'register', [
+        'key' => 'register',
+    ]);
+    $bootEnv = $container->executeMethod($sp, 'boot');
+
+    expect($registerEnv)->toBe('register');
+    expect($bootEnv)->toBe(true);
+});
